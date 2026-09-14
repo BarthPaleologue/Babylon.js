@@ -763,10 +763,14 @@ export function RegisterInstancedMesh(): void {
                 this._userInstancedBuffersStorage.data[kind] = new Float32Array(size);
                 this._userInstancedBuffersStorage.sizes[kind] = size;
                 if (usePerPassStorage) {
-                    if (perPassVertexBuffers![kind]) {
-                        perPassVertexBuffers![kind]!.dispose();
-                        perPassVertexBuffers![kind] = null;
+                    const renderPasses = this._userInstancedBuffersStorage.renderPasses!;
+                    for (const renderPassId in renderPasses) {
+                        const passVertexBuffers = renderPasses[+renderPassId];
+                        passVertexBuffers[kind]?.dispose();
+                        delete passVertexBuffers[kind];
                     }
+                    // vertexBuffers contains aliases to the current pass buffers when using per-pass storage.
+                    this._userInstancedBuffersStorage.vertexBuffers[kind] = null;
                 } else if (this._userInstancedBuffersStorage.vertexBuffers[kind]) {
                     this._userInstancedBuffersStorage.vertexBuffers[kind].dispose();
                     this._userInstancedBuffersStorage.vertexBuffers[kind] = null;
