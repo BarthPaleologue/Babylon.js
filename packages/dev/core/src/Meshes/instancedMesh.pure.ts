@@ -861,9 +861,25 @@ export function RegisterInstancedMesh(): void {
             this.instances[0].dispose();
         }
 
-        for (const kind in this.instancedBuffers) {
-            if (this._userInstancedBuffersStorage.vertexBuffers[kind]) {
-                this._userInstancedBuffersStorage.vertexBuffers[kind].dispose();
+        if (this._userInstancedBuffersStorage) {
+            if (this._instanceDataStorage.useMonoDataStorageRenderPass) {
+                for (const kind in this.instancedBuffers) {
+                    this._userInstancedBuffersStorage.vertexBuffers[kind]?.dispose();
+                }
+            } else {
+                const renderPasses = this._userInstancedBuffersStorage.renderPasses;
+                if (renderPasses) {
+                    for (const renderPassId in renderPasses) {
+                        const passVertexBuffers = renderPasses[+renderPassId];
+                        for (const kind in passVertexBuffers) {
+                            passVertexBuffers[kind]?.dispose();
+                        }
+                    }
+                    this._userInstancedBuffersStorage.renderPasses = {};
+                }
+                for (const kind in this._userInstancedBuffersStorage.vertexBuffers) {
+                    this._userInstancedBuffersStorage.vertexBuffers[kind] = null;
+                }
             }
         }
 

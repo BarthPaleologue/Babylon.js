@@ -2570,13 +2570,31 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         }
         this._disposeInstanceDataStorageRenderPass(this._instanceDataStorage.dataStorageRenderPass, dispose);
         if (this._userInstancedBuffersStorage) {
-            for (const kind in this._userInstancedBuffersStorage.vertexBuffers) {
-                const buffer = this._userInstancedBuffersStorage.vertexBuffers[kind];
-                if (buffer) {
-                    // Dispose instance buffer to be recreated in _renderWithInstances when rendered
-                    if (dispose) {
-                        buffer.dispose();
+            if (this._instanceDataStorage.useMonoDataStorageRenderPass) {
+                for (const kind in this._userInstancedBuffersStorage.vertexBuffers) {
+                    const buffer = this._userInstancedBuffersStorage.vertexBuffers[kind];
+                    if (buffer) {
+                        // Dispose instance buffer to be recreated in _renderWithInstances when rendered
+                        if (dispose) {
+                            buffer.dispose();
+                        }
+                        this._userInstancedBuffersStorage.vertexBuffers[kind] = null;
                     }
+                }
+            } else {
+                const renderPasses = this._userInstancedBuffersStorage.renderPasses;
+                if (renderPasses) {
+                    for (const renderPassId in renderPasses) {
+                        const passVertexBuffers = renderPasses[+renderPassId];
+                        if (dispose) {
+                            for (const kind in passVertexBuffers) {
+                                passVertexBuffers[kind]?.dispose();
+                            }
+                        }
+                    }
+                    this._userInstancedBuffersStorage.renderPasses = {};
+                }
+                for (const kind in this._userInstancedBuffersStorage.vertexBuffers) {
                     this._userInstancedBuffersStorage.vertexBuffers[kind] = null;
                 }
             }

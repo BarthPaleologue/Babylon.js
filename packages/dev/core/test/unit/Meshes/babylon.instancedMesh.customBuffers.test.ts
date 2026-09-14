@@ -2,10 +2,31 @@ import "core/Meshes/instancedMesh";
 import { NullEngine } from "core/Engines/nullEngine";
 import { Color4 } from "core/Maths/math.color";
 import { MeshBuilder } from "core/Meshes/meshBuilder";
+import type { Mesh } from "core/Meshes/mesh";
 import { Scene } from "core/scene";
 
 const BufferKind = "instanceColor";
 const Stride = 4;
+
+const createPerPassCustomBuffers = (source: Mesh, engine: NullEngine) => {
+    source._instanceDataStorage.useMonoDataStorageRenderPass = false;
+    source.registerInstancedBuffer(BufferKind, Stride);
+    source.instancedBuffers[BufferKind] = new Color4(1, 1, 1, 1);
+    const instance = source.createInstance("instance");
+
+    engine.currentRenderPassId = 0;
+    source._processInstancedBuffers([instance], true);
+    const firstPassBuffer = source._userInstancedBuffersStorage.renderPasses![0][BufferKind]!;
+
+    engine.currentRenderPassId = 1;
+    source._processInstancedBuffers([instance], true);
+    const secondPassBuffer = source._userInstancedBuffersStorage.renderPasses![1][BufferKind]!;
+
+    // _bindDirect exposes the current pass buffer through vertexBuffers when rendering.
+    source._userInstancedBuffersStorage.vertexBuffers[BufferKind] = secondPassBuffer;
+
+    return { firstPassBuffer, secondPassBuffer, instance };
+};
 
 describe("InstancedMesh custom buffers", () => {
     let engine: NullEngine;
@@ -77,5 +98,45 @@ describe("InstancedMesh custom buffers", () => {
         expect(resizedBuffer).not.toBe(initialBuffer);
         expect(resizedBuffer.getData()).toBe(resizedData);
         expect(source._userInstancedBuffersStorage.renderPasses).toBeUndefined();
+    });
+
+    test("disposing a mesh releases custom buffers owned by every render pass", () => {
+        const source = MeshBuilder.CreateBox("source", {}, scene);
+        const { firstPassBuffer, secondPassBuffer } = createPerPassCustomBuffers(source, engine);
+        const storage = source._userInstancedBuffersStorage;
+
+        source.dispose();
+
+        expect(firstPassBuffer.isDisposed).toBe(true);
+        expect(secondPassBuffer.isDisposed).toBe(true);
+        expect(storage.renderPasses).toEqual({});
+        expect(storage.vertexBuffers[BufferKind]).toBeNull();
+    });
+
+    test("disposing a WebGPU mesh without custom instance storage does not throw", () => {
+        const source = MeshBuilder.CreateBox("source", {}, scene);
+        source._instanceDataStorage.useMonoDataStorageRenderPass = false;
+
+        expect(() => source.dispose()).not.toThrow();
+    });
+
+    test("rebuilding a mesh forgets every per-pass custom buffer without disposing after device loss", () => {
+        const source = MeshBuilder.CreateBox("source", {}, scene);
+        const { firstPassBuffer, secondPassBuffer, instance } = createPerPassCustomBuffers(source, engine);
+        const storage = source._userInstancedBuffersStorage;
+
+        source._rebuild();
+
+        expect(firstPassBuffer.isDisposed).toBe(false);
+        expect(secondPassBuffer.isDisposed).toBe(false);
+        expect(storage.renderPasses).toEqual({});
+        expect(storage.vertexBuffers[BufferKind]).toBeNull();
+
+        engine.currentRenderPassId = 0;
+        source._processInstancedBuffers([instance], true);
+        expect(storage.renderPasses![0][BufferKind]).not.toBe(firstPassBuffer);
+
+        firstPassBuffer.dispose();
+        secondPassBuffer.dispose();
     });
 });
