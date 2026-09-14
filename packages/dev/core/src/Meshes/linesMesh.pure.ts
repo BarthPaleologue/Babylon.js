@@ -212,7 +212,7 @@ export class LinesMesh extends Mesh {
         if (!this._userInstancedBuffersStorage || this.hasThinInstances) {
             this._geometry._bind(colorEffect, indexToBind);
         } else {
-            this._geometry._bind(colorEffect, indexToBind, this._userInstancedBuffersStorage.vertexBuffers, this._userInstancedBuffersStorage.vertexArrayObjects);
+            this._geometry._bind(colorEffect, indexToBind, this._getInstanceDataStorage().instanceVertexBuffers, this._userInstancedBuffersStorage.vertexArrayObjects);
         }
 
         // Color

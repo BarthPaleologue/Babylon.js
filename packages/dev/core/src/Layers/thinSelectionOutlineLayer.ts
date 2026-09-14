@@ -3,7 +3,6 @@ import { Camera } from "../Cameras/camera.pure";
 import { RegisterAbstractEngineStates } from "../Engines/AbstractEngine/abstractEngine.states.pure";
 import { RegisterAbstractEngineStencil } from "../Engines/AbstractEngine/abstractEngine.stencil.pure";
 import { Constants } from "../Engines/constants";
-import { type ThinEngine } from "../Engines/thinEngine";
 import { AddClipPlaneUniforms, BindClipPlane, PrepareStringDefinesForClipPlanes } from "../Materials/clipPlaneMaterialHelper";
 import { type Effect, type IEffectCreationOptions } from "../Materials/effect";
 import { EffectFallbacks } from "../Materials/effectFallbacks";
@@ -538,8 +537,7 @@ export class ThinSelectionOutlineLayer extends ThinEffectLayer {
         const hardwareInstancedRendering =
             batch.hardwareInstancedRendering[subMesh._id] ||
             renderingMesh.hasThinInstances ||
-            (!!renderingMesh._userInstancedBuffersStorage &&
-                ThinSelectionOutlineLayer.InstanceSelectionIdAttributeName in renderingMesh._userInstancedBuffersStorage.vertexBuffers);
+            (!!renderingMesh._userInstancedBuffersStorage && ThinSelectionOutlineLayer.InstanceSelectionIdAttributeName in renderingMesh._userInstancedBuffersStorage.strides);
 
         // When LOD transitions cause a different mesh to render with hardware instancing,
         // the LOD mesh's own instanceSelectionId must reflect the source mesh's value so
@@ -787,54 +785,12 @@ export class ThinSelectionOutlineLayer extends ThinEffectLayer {
      * @param mesh - The mesh to clean up
      */
     private _cleanUpInstanceSelectionId(mesh: Mesh): void {
+        const kind = ThinSelectionOutlineLayer.InstanceSelectionIdAttributeName;
         if (mesh._userInstancedBuffersStorage) {
-            const kind = ThinSelectionOutlineLayer.InstanceSelectionIdAttributeName;
-
-            // Dispose per-pass VBOs for ALL render passes (WebGPU).
-            // _processInstancedBuffers creates per-pass VBOs for every render pass
-            // that renders this mesh (main scene, depth renderer, etc.), not just
-            // this layer's own passes. We must clean them all up to avoid using
-            // a destroyed GPU buffer on the next submit.
-            if (mesh._userInstancedBuffersStorage.renderPasses) {
-                for (const passId in mesh._userInstancedBuffersStorage.renderPasses) {
-                    const renderPassId = Number(passId);
-                    const passVBOs = mesh._userInstancedBuffersStorage.renderPasses[renderPassId];
-                    if (passVBOs?.[kind]) {
-                        passVBOs[kind]!.dispose();
-                        delete passVBOs[kind];
-                    }
-                }
-            }
-
-            mesh._userInstancedBuffersStorage.vertexBuffers[kind]?.dispose();
-
-            const vao = mesh._userInstancedBuffersStorage.vertexArrayObjects?.[kind];
-            if (vao) {
-                // invalidate VAO is very important to keep sync between VAO and vertex buffers
-                (this._engine as ThinEngine).releaseVertexArrayObject(vao);
-                delete mesh._userInstancedBuffersStorage.vertexArrayObjects![kind];
-            }
-
-            delete mesh._userInstancedBuffersStorage.data[kind];
-            delete mesh._userInstancedBuffersStorage.vertexBuffers[kind];
-            delete mesh._userInstancedBuffersStorage.strides[kind];
-            delete mesh._userInstancedBuffersStorage.sizes[kind];
-
-            if (Object.keys(mesh._userInstancedBuffersStorage.vertexBuffers).length === 0) {
-                mesh._userInstancedBuffersStorage = undefined!;
-            }
-        }
-        if (mesh.instancedBuffers?.[ThinSelectionOutlineLayer.InstanceSelectionIdAttributeName] !== undefined) {
-            delete mesh.instancedBuffers[ThinSelectionOutlineLayer.InstanceSelectionIdAttributeName];
-        }
-
-        // In WebGPU non-compat mode, cached render bundles (fastBundle) bake
-        // vertex-buffer GPU handles at record time. Because the new VBO has
-        // the same format (and thus the same hashCode), the pipeline cache
-        // won't detect the change and would replay the stale bundle.
-        // Resetting the draw cache forces new bundles to be recorded.
-        if (this._engine.isWebGPU && !this._engine.compatibilityMode) {
-            mesh.resetDrawCache();
+            mesh._removeInstancedBuffer(kind);
+        } else if (mesh.instancedBuffers?.[kind] !== undefined) {
+            // _selection can contain an InstancedMesh, whereas the registration belongs to its source Mesh.
+            delete mesh.instancedBuffers[kind];
         }
     }
 

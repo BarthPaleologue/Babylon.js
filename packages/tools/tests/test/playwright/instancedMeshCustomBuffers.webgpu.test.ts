@@ -57,7 +57,7 @@ test.describe("InstancedMesh custom buffers", () => {
             await renderFrame();
 
             const storage = source._userInstancedBuffersStorage;
-            const initialRenderPassIds = Object.keys(storage.renderPasses ?? {});
+            const initialRenderPassIds = Object.keys(source._instanceDataStorage.renderPasses);
 
             for (let index = 8; index < 40; index++) {
                 createInstance(index);
@@ -66,8 +66,8 @@ test.describe("InstancedMesh custom buffers", () => {
             device.pushErrorScope("validation");
             await renderFrame();
             const validationError = await device.popErrorScope();
-            const capacities = Object.values(storage.renderPasses ?? {})
-                .map((vertexBuffers) => vertexBuffers["color"]?.getBuffer()?.capacity)
+            const capacities = Object.values(source._instanceDataStorage.renderPasses)
+                .map((renderPassStorage) => renderPassStorage.instanceVertexBuffers["color"]?.getBuffer()?.capacity)
                 .filter((capacity): capacity is number => capacity !== undefined);
 
             return {

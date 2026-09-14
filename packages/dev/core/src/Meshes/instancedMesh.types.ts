@@ -1,5 +1,5 @@
-import { type VertexBuffer } from "../Buffers/buffer";
-import { type Nullable } from "../types";
+export {};
+
 declare module "./mesh.pure" {
     /** @internal */
     // eslint-disable-next-line @typescript-eslint/naming-convention
@@ -11,6 +11,9 @@ declare module "./mesh.pure" {
          * @param stride defines the stride in floats
          */
         registerInstancedBuffer(kind: string, stride: number): void;
+
+        /** @internal */
+        _removeInstancedBuffer(kind: string): void;
 
         /**
          * Invalidate VertexArrayObjects belonging to the mesh (but not to the Geometry of the mesh).
@@ -29,15 +32,9 @@ declare module "./mesh.pure" {
             /** @internal */
             sizes: { [key: string]: number };
             /** @internal */
-            vertexBuffers: { [key: string]: Nullable<VertexBuffer> };
-            /** @internal */
             strides: { [key: string]: number };
             /** @internal */
             vertexArrayObjects?: { [key: string]: WebGLVertexArrayObject };
-            /** @internal */
-            renderPasses?: {
-                [renderPassId: number]: { [kind: string]: Nullable<VertexBuffer> };
-            };
         };
     }
 }

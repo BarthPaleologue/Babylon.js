@@ -18,8 +18,9 @@ import { FreeCamera } from "core/Cameras/freeCamera";
 import type { Mesh } from "core/Meshes/mesh";
 import { MeshBuilder } from "core/Meshes/meshBuilder";
 import { SelectionOutlineLayer } from "core/Layers/selectionOutlineLayer";
+import { ThinSelectionOutlineLayer } from "core/Layers/thinSelectionOutlineLayer";
 
-const SELECTION_ID = "instanceSelectionId";
+const SELECTION_ID = ThinSelectionOutlineLayer.InstanceSelectionIdAttributeName;
 
 describe("SelectionOutlineLayer instanced buffer cleanup", () => {
     let engine: NullEngine;
@@ -85,6 +86,42 @@ describe("SelectionOutlineLayer instanced buffer cleanup", () => {
             expect(source._userInstancedBuffersStorage.data[SELECTION_ID]).toBeUndefined();
             expect(source._userInstancedBuffersStorage.strides[SELECTION_ID]).toBeUndefined();
             expect(source._userInstancedBuffersStorage.sizes[SELECTION_ID]).toBeUndefined();
+        }
+    });
+
+    test("clearSelection removes selection VBOs from every render pass without affecting other custom buffers", () => {
+        const source = MeshBuilder.CreateBox("source", {}, scene);
+        source._instanceDataStorage.useMonoDataStorageRenderPass = false;
+        source.registerInstancedBuffer("customValue", 1);
+        source.instancedBuffers.customValue = 1;
+        const firstInstance = source.createInstance("firstInstance");
+        const secondInstance = source.createInstance("secondInstance");
+        firstInstance.instancedBuffers.customValue = 2;
+        secondInstance.instancedBuffers.customValue = 3;
+
+        layer.addSelection(firstInstance);
+
+        const passBuffers = [0, 1].map((renderPassId) => {
+            engine.currentRenderPassId = renderPassId;
+            source._processInstancedBuffers([firstInstance, secondInstance], true);
+            const storage = source._getInstanceDataStorage();
+            return {
+                storage,
+                custom: storage.instanceVertexBuffers.customValue!,
+                selection: storage.instanceVertexBuffers[SELECTION_ID]!,
+            };
+        });
+
+        layer.clearSelection();
+
+        expect(SELECTION_ID in source.instancedBuffers).toBe(false);
+        expect(SELECTION_ID in firstInstance.instancedBuffers).toBe(false);
+        expect(SELECTION_ID in secondInstance.instancedBuffers).toBe(false);
+        for (const buffers of passBuffers) {
+            expect(buffers.selection.isDisposed).toBe(true);
+            expect(buffers.storage.instanceVertexBuffers[SELECTION_ID]).toBeUndefined();
+            expect(buffers.custom.isDisposed).toBe(false);
+            expect(buffers.storage.instanceVertexBuffers.customValue).toBe(buffers.custom);
         }
     });
 

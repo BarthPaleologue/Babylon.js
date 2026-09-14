@@ -103,6 +103,8 @@ class _InstanceDataStorageRenderPass {
     /** @internal */
     public instancesPreviousBuffer: Nullable<Buffer>;
     /** @internal */
+    public instanceVertexBuffers: { [kind: string]: Nullable<VertexBuffer> } = {};
+    /** @internal */
     public instancesData: Float32Array;
     /** @internal */
     public instancesPreviousData: Float32Array;
@@ -111,6 +113,8 @@ class _InstanceDataStorageRenderPass {
     /** @internal */
     public previousRenderId: number;
 }
+
+const _InstanceMatrixVertexBufferKinds = ["world0", "world1", "world2", "world3", "previousWorld0", "previousWorld1", "previousWorld2", "previousWorld3"] as const;
 
 /**
  * @internal
@@ -1307,12 +1311,13 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         if (!this._geometry) {
             return null;
         }
-        let data = bypassInstanceData
-            ? undefined
-            : this._userInstancedBuffersStorage?.vertexBuffers[kind]?.getFloatData(
-                  this.instances.length + 1, // +1 because the master mesh is not included in the instances array
-                  forceCopy || (copyWhenShared && this._geometry.meshes.length !== 1)
-              );
+        let data =
+            bypassInstanceData || !this._userInstancedBuffersStorage
+                ? undefined
+                : this._getExistingInstanceDataStorage()?.instanceVertexBuffers[kind]?.getFloatData(
+                      this.instances.length + 1, // +1 because the master mesh is not included in the instances array
+                      forceCopy || (copyWhenShared && this._geometry.meshes.length !== 1)
+                  );
         if (!data) {
             data = this._geometry.getVerticesData(kind, copyWhenShared, forceCopy);
         }
@@ -1354,7 +1359,8 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
             return null;
         }
 
-        return (bypassInstanceData ? undefined : this._userInstancedBuffersStorage?.vertexBuffers[kind]) ?? this._geometry.getVertexBuffer(kind);
+        const instanceVertexBuffer = bypassInstanceData || !this._userInstancedBuffersStorage ? undefined : this._getExistingInstanceDataStorage()?.instanceVertexBuffers[kind];
+        return instanceVertexBuffer ?? this._geometry.getVertexBuffer(kind);
     }
 
     /**
@@ -1383,7 +1389,10 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
             }
             return false;
         }
-        return (!bypassInstanceData && this._userInstancedBuffersStorage?.vertexBuffers[kind] !== undefined) || this._geometry.isVerticesDataPresent(kind);
+        const instanceDataPresent =
+            !bypassInstanceData &&
+            (this._userInstancedBuffersStorage?.strides[kind] !== undefined || this._getExistingInstanceDataStorage()?.instanceVertexBuffers[kind] !== undefined);
+        return instanceDataPresent || this._geometry.isVerticesDataPresent(kind);
     }
 
     /**
@@ -1412,7 +1421,7 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
             return false;
         }
         if (!bypassInstanceData) {
-            const buffer = this._userInstancedBuffersStorage?.vertexBuffers[kind];
+            const buffer = this._userInstancedBuffersStorage && this._getExistingInstanceDataStorage()?.instanceVertexBuffers[kind];
             if (buffer) {
                 return buffer.isUpdatable();
             }
@@ -1437,7 +1446,12 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         }
         const kinds = this._geometry.getVerticesDataKinds();
         if (!bypassInstanceData && this._userInstancedBuffersStorage) {
-            for (const kind in this._userInstancedBuffersStorage.vertexBuffers) {
+            for (const kind in this._getExistingInstanceDataStorage()?.instanceVertexBuffers ?? {}) {
+                if (kinds.indexOf(kind) === -1) {
+                    kinds.push(kind);
+                }
+            }
+            for (const kind in this._userInstancedBuffersStorage.strides) {
                 if (kinds.indexOf(kind) === -1) {
                     kinds.push(kind);
                 }
@@ -1614,6 +1628,36 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         }
 
         return instanceDataStorage;
+    }
+
+    private _getExistingInstanceDataStorage(): Nullable<_InstanceDataStorageRenderPass> {
+        return this._instanceDataStorage.useMonoDataStorageRenderPass
+            ? this._instanceDataStorage.dataStorageRenderPass
+            : this._instanceDataStorage.renderPasses[this._instanceDataStorage.engine.currentRenderPassId];
+    }
+
+    /** @internal */
+    public _invalidateInstanceVertexBuffer(kind: string): void {
+        let invalidated = false;
+        const invalidate = (storage?: _InstanceDataStorageRenderPass) => {
+            if (!storage) {
+                return;
+            }
+            const vertexBuffer = storage.instanceVertexBuffers[kind];
+            if (vertexBuffer) {
+                vertexBuffer.dispose();
+                invalidated = true;
+            }
+            delete storage.instanceVertexBuffers[kind];
+        };
+
+        invalidate(this._instanceDataStorage.dataStorageRenderPass);
+        for (const renderPassId in this._instanceDataStorage.renderPasses) {
+            invalidate(this._instanceDataStorage.renderPasses[renderPassId]);
+        }
+        if (invalidated && this.getEngine().isWebGPU && !this.getEngine().compatibilityMode) {
+            this.resetDrawCache();
+        }
     }
 
     // Methods
@@ -2100,17 +2144,7 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         if (!allowInstancedRendering || !this._userInstancedBuffersStorage || this.hasThinInstances) {
             this._geometry._bind(effect, indexToBind);
         } else {
-            if (
-                !this._instanceDataStorage.useMonoDataStorageRenderPass &&
-                this._userInstancedBuffersStorage.renderPasses &&
-                this._userInstancedBuffersStorage.renderPasses[this._instanceDataStorage.engine.currentRenderPassId]
-            ) {
-                const vertexBuffers = this._userInstancedBuffersStorage.renderPasses[this._instanceDataStorage.engine.currentRenderPassId];
-                for (const kind in vertexBuffers) {
-                    this._userInstancedBuffersStorage.vertexBuffers[kind] = vertexBuffers[kind];
-                }
-            }
-            this._geometry._bind(effect, indexToBind, this._userInstancedBuffersStorage.vertexBuffers, this._userInstancedBuffersStorage.vertexArrayObjects);
+            this._geometry._bind(effect, indexToBind, this._getInstanceDataStorage().instanceVertexBuffers, this._userInstancedBuffersStorage.vertexArrayObjects);
         }
         return this;
     }
@@ -2324,40 +2358,20 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         }
 
         if (needUpdateBuffer) {
-            if (instancesBuffer) {
-                instancesBuffer.dispose();
-            }
-
-            if (instancesPreviousBuffer) {
-                instancesPreviousBuffer.dispose();
-            }
+            this._disposeInstanceMatrixBuffers(instanceStorage, true);
 
             instancesBuffer = new Buffer(engine, instanceStorage.instancesData, true, 16, false, true);
             instanceStorage.instancesBuffer = instancesBuffer;
             if (!this._userInstancedBuffersStorage) {
                 this._userInstancedBuffersStorage = {
                     data: {},
-                    vertexBuffers: {},
                     strides: {},
                     sizes: {},
                     vertexArrayObjects: this.getEngine().getCaps().vertexArrayObject ? {} : undefined,
                 };
             }
 
-            let vertexAndArrayObjectBuffers;
-            if (!this._instanceDataStorage.useMonoDataStorageRenderPass) {
-                if (!this._userInstancedBuffersStorage.renderPasses) {
-                    this._userInstancedBuffersStorage.renderPasses = {};
-                }
-
-                const currentRenderPassId = this._instanceDataStorage.engine.currentRenderPassId;
-                vertexAndArrayObjectBuffers = this._userInstancedBuffersStorage.renderPasses[currentRenderPassId];
-                if (!vertexAndArrayObjectBuffers) {
-                    this._userInstancedBuffersStorage.renderPasses[currentRenderPassId] = vertexAndArrayObjectBuffers = {};
-                }
-            } else {
-                vertexAndArrayObjectBuffers = this._userInstancedBuffersStorage.vertexBuffers;
-            }
+            const vertexAndArrayObjectBuffers = instanceStorage.instanceVertexBuffers;
 
             vertexAndArrayObjectBuffers["world0"] = instancesBuffer.createVertexBuffer("world0", 0, 4);
             vertexAndArrayObjectBuffers["world1"] = instancesBuffer.createVertexBuffer("world1", 4, 4);
@@ -2544,20 +2558,42 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         return this;
     }
 
-    private _disposeInstanceDataStorageRenderPass(dataStorage?: _InstanceDataStorageRenderPass, dispose = false) {
-        if (dataStorage?.instancesBuffer) {
-            // Dispose instance buffer to be recreated in _renderWithInstances when rendered
+    /** @internal */
+    private _disposeInstanceMatrixBuffers(dataStorage: _InstanceDataStorageRenderPass, dispose: boolean): void {
+        for (const kind of _InstanceMatrixVertexBufferKinds) {
+            if (dispose) {
+                dataStorage.instanceVertexBuffers[kind]?.dispose();
+            }
+            delete dataStorage.instanceVertexBuffers[kind];
+        }
+
+        if (dataStorage.instancesBuffer) {
             if (dispose) {
                 dataStorage.instancesBuffer.dispose();
             }
             dataStorage.instancesBuffer = null;
         }
-        if (dataStorage?.instancesPreviousBuffer) {
+        if (dataStorage.instancesPreviousBuffer) {
             if (dispose) {
                 dataStorage.instancesPreviousBuffer.dispose();
             }
             dataStorage.instancesPreviousBuffer = null;
         }
+    }
+
+    /** @internal */
+    public _disposeInstanceDataStorageRenderPass(dataStorage?: _InstanceDataStorageRenderPass, dispose = false): void {
+        if (!dataStorage) {
+            return;
+        }
+
+        this._disposeInstanceMatrixBuffers(dataStorage, dispose);
+        for (const kind in dataStorage.instanceVertexBuffers) {
+            if (dispose) {
+                dataStorage.instanceVertexBuffers[kind]?.dispose();
+            }
+        }
+        dataStorage.instanceVertexBuffers = {};
     }
 
     /**
@@ -2570,34 +2606,6 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         }
         this._disposeInstanceDataStorageRenderPass(this._instanceDataStorage.dataStorageRenderPass, dispose);
         if (this._userInstancedBuffersStorage) {
-            if (this._instanceDataStorage.useMonoDataStorageRenderPass) {
-                for (const kind in this._userInstancedBuffersStorage.vertexBuffers) {
-                    const buffer = this._userInstancedBuffersStorage.vertexBuffers[kind];
-                    if (buffer) {
-                        // Dispose instance buffer to be recreated in _renderWithInstances when rendered
-                        if (dispose) {
-                            buffer.dispose();
-                        }
-                        this._userInstancedBuffersStorage.vertexBuffers[kind] = null;
-                    }
-                }
-            } else {
-                const renderPasses = this._userInstancedBuffersStorage.renderPasses;
-                if (renderPasses) {
-                    for (const renderPassId in renderPasses) {
-                        const passVertexBuffers = renderPasses[+renderPassId];
-                        if (dispose) {
-                            for (const kind in passVertexBuffers) {
-                                passVertexBuffers[kind]?.dispose();
-                            }
-                        }
-                    }
-                    this._userInstancedBuffersStorage.renderPasses = {};
-                }
-                for (const kind in this._userInstancedBuffersStorage.vertexBuffers) {
-                    this._userInstancedBuffersStorage.vertexBuffers[kind] = null;
-                }
-            }
             if (this._userInstancedBuffersStorage.vertexArrayObjects) {
                 this._userInstancedBuffersStorage.vertexArrayObjects = {};
             }
@@ -2612,15 +2620,6 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         if (renderPassStorage) {
             this._disposeInstanceDataStorageRenderPass(renderPassStorage, true);
             delete this._instanceDataStorage.renderPasses[id];
-        }
-        if (this._userInstancedBuffersStorage?.renderPasses) {
-            const passVBOs = this._userInstancedBuffersStorage.renderPasses[id];
-            if (passVBOs) {
-                for (const kind in passVBOs) {
-                    passVBOs[kind]?.dispose();
-                }
-            }
-            delete this._userInstancedBuffersStorage.renderPasses[id];
         }
     }
 
