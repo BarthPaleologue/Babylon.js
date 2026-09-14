@@ -1,8 +1,15 @@
 import { ShaderLanguage } from "../../Materials/shaderLanguage";
 
+const PreprocessorDirectiveRegex = /^#(if|ifdef|ifndef|elif|else|endif)\b/;
 const LexicalStateRegex = /[()]|\/\/|\/\*/;
 const CommentTokenRegex = /\/\*|\*\/|\/\//g;
 const LexicalTokenRegex = /\/\*|\*\/|\/\/|[();]/g;
+
+interface IConditionalParenthesesState {
+    startDepth: number;
+    branchDepths: number[];
+    hasElse: boolean;
+}
 
 function PushSemicolonSeparatedLine(output: string[], line: string, trimmedLine: string): void {
     const semicolonIndex = trimmedLine.indexOf(";");
@@ -45,6 +52,7 @@ export class ShaderCodeCursor {
         this._lines.length = 0;
         let parenthesesDepth = 0;
         let blockCommentDepth = 0;
+        const conditionalParenthesesStates: IConditionalParenthesesState[] = [];
 
         for (const line of value) {
             // Skip empty lines
@@ -52,8 +60,35 @@ export class ShaderCodeCursor {
                 continue;
             }
 
-            // Prevent removing line break in macros.
-            if (line[0] === "#") {
+            const trimmedLine = line.trim();
+
+            if (!trimmedLine) {
+                continue;
+            }
+
+            if (blockCommentDepth === 0 && trimmedLine[0] === "#") {
+                const directive = PreprocessorDirectiveRegex.exec(trimmedLine)?.[1];
+
+                if (directive === "if" || directive === "ifdef" || directive === "ifndef") {
+                    conditionalParenthesesStates.push({ startDepth: parenthesesDepth, branchDepths: [], hasElse: false });
+                } else if ((directive === "else" || directive === "elif") && conditionalParenthesesStates.length > 0) {
+                    const conditionalState = conditionalParenthesesStates[conditionalParenthesesStates.length - 1];
+                    conditionalState.branchDepths.push(parenthesesDepth);
+                    conditionalState.hasElse ||= directive === "else";
+                    parenthesesDepth = conditionalState.startDepth;
+                } else if (directive === "endif" && conditionalParenthesesStates.length > 0) {
+                    const conditionalState = conditionalParenthesesStates.pop()!;
+                    conditionalState.branchDepths.push(parenthesesDepth);
+
+                    // A conditional without an else also has an implicit branch that leaves the depth unchanged.
+                    if (!conditionalState.hasElse) {
+                        conditionalState.branchDepths.push(conditionalState.startDepth);
+                    }
+
+                    const branchDepth = conditionalState.branchDepths[0];
+                    parenthesesDepth = conditionalState.branchDepths.every((depth) => depth === branchDepth) ? branchDepth : conditionalState.startDepth;
+                }
+
                 if (line.indexOf("/") !== -1) {
                     CommentTokenRegex.lastIndex = 0;
                     let commentMatch: RegExpExecArray | null;
@@ -71,17 +106,12 @@ export class ShaderCodeCursor {
                     }
                 }
 
-                this._lines.push(line);
+                // Prevent removing line breaks in preprocessor directives while preserving the historical trimming of indented directives.
+                this._lines.push(line[0] === "#" ? line : trimmedLine);
                 continue;
             }
 
             // Do not split single line comments
-            const trimmedLine = line.trim();
-
-            if (!trimmedLine) {
-                continue;
-            }
-
             if (blockCommentDepth === 0 && trimmedLine.startsWith("//")) {
                 this._lines.push(line);
                 continue;

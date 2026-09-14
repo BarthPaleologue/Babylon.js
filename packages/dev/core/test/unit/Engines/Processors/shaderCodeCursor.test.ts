@@ -78,6 +78,10 @@ describe("ShaderCodeCursor", () => {
         expect(readLines([";", "first(); ; second();"], ShaderLanguage.WGSL)).toEqual(["first();", "second();"]);
     });
 
+    it("ignores parentheses in indented preprocessor directives", () => {
+        expect(readLines(["    #define OPEN (", "first(); second();"], ShaderLanguage.GLSL)).toEqual(["#define OPEN (", "first();", "second();"]);
+    });
+
     it("tracks block comments that start on preprocessor directives", () => {
         expect(readLines(["#ifdef FOO", "foo();", "#endif /* explanation", "(", "*/", "first(); second();"], ShaderLanguage.GLSL)).toEqual([
             "#ifdef FOO",
@@ -88,6 +92,45 @@ describe("ShaderCodeCursor", () => {
             "first();",
             "second();",
         ]);
+    });
+
+    it("does not accumulate parenthesis depth across preprocessor branches", () => {
+        expect(readLines(["#ifdef USE_FOO", "foo(", "#else", "bar(", "#endif", "x);", "first(); second();"], ShaderLanguage.WGSL)).toEqual([
+            "#ifdef USE_FOO",
+            "foo(",
+            "#else",
+            "bar(",
+            "#endif",
+            "x);",
+            "first();",
+            "second();",
+        ]);
+    });
+
+    it.each([
+        ["an else branch", ["#ifdef USE_FOO", "foo();", "#else", "bar(", "#endif"]],
+        ["an elif branch", ["#if USE_FOO", "foo();", "#elif USE_BAR", "bar(", "#else", "baz();", "#endif"]],
+        ["an if branch without an else", ["#ifdef USE_FOO", "foo(", "#endif"]],
+    ])("does not propagate mismatched parenthesis depth from %s", (_description, conditionalLines) => {
+        expect(readLines([...conditionalLines, "first(); second();"], ShaderLanguage.WGSL)).toEqual([...conditionalLines, "first();", "second();"]);
+    });
+
+    it("processes declarations separately after asymmetric preprocessor branches", () => {
+        const processedUniforms: string[] = [];
+        const options = createProcessingOptions();
+        options.defines.push("#define USE_FOO");
+        options.processor = {
+            ...options.processor,
+            uniformRegexp: /^uniform/,
+            uniformProcessor: (line) => {
+                processedUniforms.push(line);
+                return line;
+            },
+        };
+
+        Process("#ifdef USE_FOO\nfoo();\n#else\nbar(\n#endif\nuniform first: f32; uniform second: f32;", options, () => {});
+
+        expect(processedUniforms).toEqual(["uniform first: f32;", "uniform second: f32;"]);
     });
 
     it("ignores parentheses in nested block comments", () => {
