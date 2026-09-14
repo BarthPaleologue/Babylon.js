@@ -282,7 +282,7 @@ function EvaluatePreProcessors(
     preProcessorsFromCode: { [key: string]: string }
 ): string {
     const rootNode = new ShaderCodeNode();
-    const cursor = new ShaderCodeCursor();
+    const cursor = new ShaderCodeCursor(options.processor?.shaderLanguage ?? ShaderLanguage.GLSL);
 
     cursor.lineIndex = -1;
     cursor.lines = sourceCode.split("\n");
